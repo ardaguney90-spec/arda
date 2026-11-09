@@ -1,0 +1,5 @@
+# Elle slow-motion listesi (--slowmo-file slowmo_ornek.txt)
+# Biçim:  dosya_adı   başlangıç_saniyesi   [süre_saniye]
+# Saniye "1:23.5" gibi dakika:saniye de yazılabilir.
+GX010123.MP4      14.5   2.5
+VID_20260510_101233.mp4   1:02   2
