@@ -50,8 +50,9 @@ DEFAULT_SETTINGS = {
     "title": "", "teaser": 30, "clip_len": "", "res": "1920x1080", "transition": "mix",
     "trans_dur": 0.6, "slowmo": -1, "slowmo_speed": 0.4, "slowmo_len": 2.0,
     "music": "", "keep_clip_audio": True, "quality": "iyi", "skip_start": 0.0,
-    "whisper_model": "small",
+    "whisper_model": "small", "logo": "", "logo_dur": 3.0,
 }
+LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"}
 
 
 class Project:
@@ -60,8 +61,9 @@ class Project:
         self.videos = root / "videolar"
         self.music = root / "muzik"
         self.out = root / "cikti"
+        self.logo_dir = root / "logo"
         self.cache = root / ".cache"
-        for d in (self.videos, self.music, self.out, self.cache / "thumbs",
+        for d in (self.videos, self.music, self.out, self.logo_dir, self.cache / "thumbs",
                   self.cache / "transcripts", self.cache / "bip"):
             d.mkdir(parents=True, exist_ok=True)
         self.state_file = root / "panel.json"
@@ -144,9 +146,10 @@ class Project:
                     "excluded": n in self.state["excluded"],
                 })
             music = [p.name for p in sorted(self.music.iterdir()) if p.suffix.lower() in AUDIO_EXTS]
+            logos = [p.name for p in sorted(self.logo_dir.iterdir()) if p.suffix.lower() in LOGO_EXTS]
             outputs = [p.name for p in sorted(self.out.iterdir(), key=lambda p: -p.stat().st_mtime)
                        if p.is_file()]
-            return {"videos": vids, "manual_order": self.state["manual_order"], "music": music,
+            return {"videos": vids, "manual_order": self.state["manual_order"], "music": music, "logos": logos,
                     "settings": self.state["settings"], "outputs": outputs,
                     "jobs": sorted(self.jobs.values(), key=lambda j: -j["created"])[:20],
                     "project": str(self.root)}
@@ -243,36 +246,21 @@ class Project:
                           preset="veryfast" if fast else "medium", smooth_slowmo=False)
             title = st["title"].strip() or None
             safe = re.sub(r"[^\w\-]+", "_", title or "offroad_edit").strip("_") or "offroad_edit"
-            final = self.out / f"{safe}.mp4"
 
-            def stage(lo, hi, msg):
-                def p(x):
-                    job["progress"] = lo + (hi - lo) * x
-                    job["message"] = f"{msg} %{int(x * 100)}"
-                return p
+            by_name = {n: c for n, c in zip(names, clips)}
+            quotes = [(by_name[n], q["start"], q["end"], q["text"])
+                      for n in names for q in quotes_state.get(n, [])]
+            logo = self.logo_dir / st["logo"] if st.get("logo") else None
 
-            if teaser:
-                by_name = {n: c for n, c in zip(names, clips)}
-                quotes = [(by_name[n], q["start"], q["end"], q["text"])
-                          for n in names for q in quotes_state.get(n, [])]
-                tclips = oe.build_teaser(clips, length=teaser, quotes=quotes)
-                t_out, m_out = self.out / f".{safe}_fragman.mp4", self.out / f".{safe}_ana.mp4"
-                oe.render(tclips, t_out, trans=0.25, style="mix", title=None,
-                          progress=stage(0.25, 0.4, "Açılış fragmanı oluşturuluyor"), **common)
-                oe.render(clips, m_out, trans=trans, style=st["transition"], title=title,
-                          progress=stage(0.4, 0.97, "Ana video oluşturuluyor"), **common)
-                job["message"] = "Birleştiriliyor..."
-                oe.concat_videos([t_out, m_out], final)
-                t_out.unlink(missing_ok=True)
-                m_out.unlink(missing_ok=True)
-            else:
-                oe.render(clips, final, trans=trans, style=st["transition"], title=title,
-                          progress=stage(0.25, 0.97, "Video oluşturuluyor"), **common)
-            oe.premiere_xml(clips, self.out / f"{safe}_premiere.xml", name=title or safe,
-                            width=w, height=h, fps=30, trans=trans, style=st["transition"])
-            oe.write_plan(clips, self.out / f"{safe}_edit_plan.csv", st["transition"])
+            def prog(x, msg):
+                job["progress"] = 0.25 + 0.75 * x
+                job["message"] = msg
+            res = oe.produce(clips, self.out, safe=safe, name=title or safe, title=title,
+                             teaser_len=teaser, quotes=quotes, logo=logo,
+                             logo_dur=float(st.get("logo_dur") or 3), trans=trans,
+                             style=st["transition"], progress=prog, **common)
             job["message_done"] = "Video hazır!"
-            return {"video": final.name, "xml": f"{safe}_premiere.xml", "csv": f"{safe}_edit_plan.csv"}
+            return res
         return self.start_job("render", "Videoyu oluştur", fn)
 
     def thumb(self, name: str) -> Path | None:
@@ -380,9 +368,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "quotes": P.state["quotes"].get(name, [])})
             if u.path.startswith("/thumb/"):
                 return self.send_file(P.thumb(safe_name(u.path[7:])))
-            m = re.match(r"^/files/(videolar|muzik|cikti)/(.+)$", u.path)
+            m = re.match(r"^/files/(videolar|muzik|cikti|logo)/(.+)$", u.path)
             if m:
-                base = {"videolar": P.videos, "muzik": P.music, "cikti": P.out}[m.group(1)]
+                base = {"videolar": P.videos, "muzik": P.music, "cikti": P.out,
+                        "logo": P.logo_dir}[m.group(1)]
                 return self.send_file(base / safe_name(m.group(2)), download="dl" in q)
             self.send_error(HTTPStatus.NOT_FOUND)
         except (KeyError, ValueError) as e:
@@ -405,6 +394,10 @@ class Handler(BaseHTTPRequestHandler):
             if ext not in AUDIO_EXTS:
                 return self.send_json({"error": "Müzik dosyası değil"}, 400)
             dest = P.music / name
+        elif kind == "logo":
+            if ext not in LOGO_EXTS:
+                return self.send_json({"error": "Logo PNG/JPG ya da MP4/MOV olmalı"}, 400)
+            dest = P.logo_dir / name
         else:
             if ext not in oe.VIDEO_EXTS:
                 return self.send_json({"error": f"Desteklenmeyen video türü: {ext}"}, 400)
@@ -426,9 +419,9 @@ class Handler(BaseHTTPRequestHandler):
         if lm and lm.isdigit():   # telefondaki dosya tarihini koru (sıralama için yedek bilgi)
             t = int(lm) / 1000
             os.utime(dest, (t, t))
-        if kind == "music":
+        if kind in ("music", "logo"):
             with P.lock:
-                P.state["settings"]["music"] = name
+                P.state["settings"][kind] = name
                 P.save()
         else:
             P.meta.pop(name, None)

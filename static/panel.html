@@ -93,6 +93,7 @@ body.dragover #drop{display:flex}
   <button class="primary" onclick="pick('video')">＋ Video yükle</button>
   <input type="file" id="fileVideo" accept="video/*,.mts,.m2ts,.insv,.lrv" multiple hidden>
   <input type="file" id="fileMusic" accept="audio/*" hidden>
+  <input type="file" id="fileLogo" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" hidden>
 </header>
 
 <section>
@@ -137,7 +138,11 @@ body.dragover #drop{display:flex}
   <div class="box">
     <h2>3 · Videoyu oluştur</h2>
     <div class="form" id="form">
-      <label>Başlık (açılışta görünür)<input name="title" placeholder="Kaz Dağları Offroad 2026"></label>
+      <label>Logo (fragmandan sonra çıkar)
+        <span style="display:flex;gap:6px"><select name="logo" id="logoSel" style="flex:1"></select>
+        <button type="button" onclick="pick('logo')">＋</button></span></label>
+      <label>Logo süresi (sn, resimse)<input name="logo_dur" type="number" min="1" max="10" step="0.5"></label>
+      <label>Başlık (ana videonun başında)<input name="title" placeholder="Kaz Dağları Offroad 2026"></label>
       <label>Açılış fragmanı (en iyi anlar)
         <select name="teaser"><option value="0">Yok</option><option value="15">15 sn</option>
           <option value="30">30 sn</option><option value="45">45 sn</option><option value="60">60 sn</option></select></label>
@@ -360,6 +365,7 @@ async function transcribe() {
 let settingsDrawn = false;
 function drawSettings() {
   $('#musicSel').innerHTML = '<option value="">Yok (klip sesleri)</option>' + S.music.map(m => `<option>${esc(m)}</option>`).join('');
+  $('#logoSel').innerHTML = '<option value="">Logo yok</option>' + S.logos.map(m => `<option>${esc(m)}</option>`).join('');
   if (settingsDrawn && document.activeElement && $('#form').contains(document.activeElement)) return;
   for (const el of $('#form').querySelectorAll('[name]')) {
     const v = S.settings[el.name]; if (v === undefined) continue;
@@ -398,7 +404,7 @@ function drawJobs() {
       const f = r.result, u = n => '/files/cikti/' + enc(n);
       $('#result').innerHTML = `<video controls src="${u(f.video)}?v=${r.id}" style="margin-top:10px"></video>
         <div class="pbar"><a href="${u(f.video)}?dl=1"><button class="primary">⬇ Videoyu indir</button></a>
-        <a href="${u(f.xml)}?dl=1"><button>⬇ Premiere Pro XML</button></a><a href="${u(f.csv)}?dl=1"><button>⬇ Sıralama listesi</button></a></div>`;
+        ${f.xml ? `<a href="${u(f.xml)}?dl=1"><button>⬇ Premiere Pro XML (fragman + logo + ana video)</button></a>` : ''}<a href="${u(f.csv)}?dl=1"><button>⬇ Sıralama listesi</button></a></div>`;
     }
   }
   if (cur && T) drawTranscript();
@@ -427,7 +433,8 @@ async function poll() {
 }
 
 /* ---------------- yükleme ---------------- */
-function pick(kind) { $(kind === 'music' ? '#fileMusic' : '#fileVideo').click(); }
+function pick(kind) { $({music: '#fileMusic', logo: '#fileLogo'}[kind] || '#fileVideo').click(); }
+$('#fileLogo').onchange = e => { upload([...e.target.files], 'logo'); e.target.value = ''; };
 $('#fileVideo').onchange = e => { upload([...e.target.files], 'video'); e.target.value = ''; };
 $('#fileMusic').onchange = e => { upload([...e.target.files], 'music'); e.target.value = ''; };
 let dragDepth = 0;
@@ -438,7 +445,8 @@ addEventListener('drop', e => {
   if (!e.dataTransfer.types.includes('Files')) return;
   e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragover');
   const files = [...e.dataTransfer.files];
-  upload(files.filter(f => !f.type.startsWith('audio/')), 'video');
+  upload(files.filter(f => f.type.startsWith('image/')), 'logo');
+  upload(files.filter(f => !f.type.startsWith('audio/') && !f.type.startsWith('image/')), 'video');
   upload(files.filter(f => f.type.startsWith('audio/')), 'music');
 });
 async function upload(files, kind) {

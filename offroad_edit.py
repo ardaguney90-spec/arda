@@ -545,73 +545,180 @@ def render(clips: list[Clip], out: Path, *, width: int, height: int, fps: int,
 # --------------------------------------------------------------------------- #
 # 2) Premiere Pro XML (File > Import ile açılır)
 # --------------------------------------------------------------------------- #
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def media_duration(p: Path) -> float:
+    try:
+        return float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                          "-of", "csv=p=0", str(p)]).stdout.strip() or 0)
+    except (subprocess.CalledProcessError, ValueError):
+        return 0.0
+
+
+def render_logo(logo: Path, out: Path, *, width: int, height: int, fps: int, dur: float,
+                crf: int, preset: str) -> float:
+    """Logo bölümü: resimse (PNG – şeffaf olabilir) beyaz flaş + hafif zoom ile belirir,
+    ekranda durur ve kararır. Videoysa (logo animasyonu) olduğu gibi kullanılır.
+    Diğer parçalarla aynı ayarlarda kodlanır ki uç uca eklenebilsin."""
+    is_img = logo.suffix.lower() in IMAGE_EXTS
+    if not is_img:
+        dur = media_duration(logo) or dur
+    has_audio = (not is_img) and bool(run(
+        ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+         "-of", "csv=p=0", str(logo)]).stdout.strip())
+    lw, lh = int(width * 0.5), int(height * 0.45)
+    if is_img:
+        inputs = ["-loop", "1", "-t", f"{dur:.3f}", "-i", str(logo)]
+        lg = (f"[0:v]format=rgba,scale={lw}:{lh}:force_original_aspect_ratio=decrease,"
+              f"scale=w='2*trunc(iw*(1+0.12*max(0,1-t/0.7))/2)':h=-2:eval=frame,"
+              f"fade=t=in:st=0:d=0.35:alpha=1,fade=t=out:st={dur - 0.5:.3f}:d=0.5:alpha=1[lg]")
+        vf = (f"color=c=black:s={width}x{height}:r={fps}:d={dur:.3f}[bg];{lg};"
+              f"[bg][lg]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p,"
+              f"fade=t=in:st=0:d=0.3:color=white[v]")
+    else:
+        inputs = ["-i", str(logo)]
+        vf = (f"color=c=black:s={width}x{height}:r={fps}:d={dur:.3f}[bg];"
+              f"[0:v]fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,format=rgba[lg];"
+              f"[bg][lg]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p[v]")
+    if has_audio:
+        af = ["-map", "0:a"]
+    else:
+        inputs += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+        af = ["-map", f"{len([x for x in inputs if x == '-i']) - 1}:a"]
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs,
+           "-filter_complex", vf, "-map", "[v]", *af, "-t", f"{dur:.3f}",
+           "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-r", str(fps),
+           "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("Logo bölümü oluşturulamadı:\n" + r.stderr[-1500:])
+    return dur
+
+
 def premiere_xml(clips: list[Clip], out: Path, *, name: str, width: int, height: int,
-                 fps: int, trans: float, style: str) -> None:
-    transitions = pick_transitions(max(len(clips) - 1, 0), style)
-    tf = max(2, int(round(trans * fps)))
-    half = tf // 2
+                 fps: int, trans: float, style: str, teaser: list[Clip] | None = None,
+                 teaser_trans: float = 0.25, logo: Path | None = None, logo_dur: float = 3.0,
+                 music: Path | None = None) -> None:
+    """Premiere Pro timeline'ı: [fragman] -> [logo] -> ana video, A2'de müzik.
+    Her kesimde Cross Dissolve + "AtomX: ..." marker'ı; slow-mo ve altyazılar da marker."""
     rate = f"<rate><timebase>{fps}</timebase><ntsc>FALSE</ntsc></rate>"
 
     def fr(sec: float) -> int:
         return int(round(sec * fps))
 
     def pathurl(p: Path) -> str:
-        s = p.as_posix()
+        s = p.resolve().as_posix()
         if re.match(r"^[A-Za-z]:/", s):   # Windows yolu
             s = "/" + s
         return "file://localhost" + quote(s)
 
-    v_items, a_items, markers = [], [], []
-    pos = 0
+    # Zaman çizelgesine girecek parçalar: (tür, klip/yol, geçiş_sn, geçiş_adı_sonrası)
+    entries: list[dict] = []
+    teaser = teaser or []
+    t_names = pick_transitions(len(teaser), "mix")
+    for i, c in enumerate(teaser):
+        entries.append({"clip": c, "trans": teaser_trans, "tname": t_names[i][1], "part": "Fragman"})
+    if logo:
+        is_img = logo.suffix.lower() in IMAGE_EXTS
+        ldur = logo_dur if is_img else (media_duration(logo) or logo_dur)
+        entries.append({"logo": logo, "dur": ldur, "trans": trans, "tname": "Flash / Light Leak",
+                        "part": "Logo", "img": is_img})
+    m_names = pick_transitions(len(clips), style)
     for i, c in enumerate(clips):
-        src_dur = fr(c.duration)
-        # geçişlerin ortalanabilmesi için her iki uçta "handle" bırak
-        cin = max(fr(c.start), half if i > 0 else 0)
-        cout = min(fr(c.start + c.src_len), src_dur - (half if i < len(clips) - 1 else 0))
-        if cout - cin < tf + 2:
-            cin, cout = 0, src_dur
-        length = cout - cin
-        start, end = pos, pos + length
-        fid = f"file-{i + 1}"
-        file_el = (
-            f'<file id="{fid}"><name>{escape(c.path.name)}</name>'
-            f"<pathurl>{escape(pathurl(c.path))}</pathurl>{rate}<duration>{src_dur}</duration>"
-            f"<media><video><samplecharacteristics>{rate}<width>{c.width}</width>"
-            f"<height>{c.height}</height></samplecharacteristics></video>"
-            + ("<audio><channelcount>2</channelcount></audio>" if c.has_audio else "")
-            + "</media></file>"
-        )
-        common = (f"<name>{escape(c.path.name)}</name><enabled>TRUE</enabled>"
+        entries.append({"clip": c, "trans": trans, "tname": m_names[i][1], "part": "Ana video"})
+
+    v_items, a_items, markers = [], [], []
+    files_done: set[str] = set()
+    file_ids: dict[str, str] = {}
+    pos = 0
+    n = len(entries)
+    for i, e in enumerate(entries):
+        tf_prev = max(2, fr(entries[i - 1]["trans"])) if i > 0 else 0
+        tf_next = max(2, fr(e["trans"])) if i < n - 1 else 0
+        if "logo" in e:
+            path, src_dur, has_audio = e["logo"], fr(e["dur"]) + 60, False
+            w_, h_ = width, height
+            cin, cout = 30, 30 + fr(e["dur"])
+            label = path.name
+        else:
+            c = e["clip"]
+            path, src_dur, has_audio, w_, h_ = c.path, fr(c.duration), c.has_audio, c.width, c.height
+            cin = max(fr(c.start), tf_prev // 2)
+            cout = min(fr(c.start + c.src_len), src_dur - tf_next // 2)
+            if cout - cin < 4:
+                cin, cout = 0, src_dur
+            label = c.path.name
+        key = str(path)
+        if key not in file_ids:
+            file_ids[key] = f"file-{len(file_ids) + 1}"
+        fid = file_ids[key]
+        if key in files_done:
+            file_el = f'<file id="{fid}"/>'
+        else:
+            files_done.add(key)
+            file_el = (
+                f'<file id="{fid}"><name>{escape(path.name)}</name>'
+                f"<pathurl>{escape(pathurl(path))}</pathurl>{rate}<duration>{src_dur}</duration>"
+                f"<media><video><samplecharacteristics>{rate}<width>{w_}</width>"
+                f"<height>{h_}</height></samplecharacteristics></video>"
+                + ("<audio><channelcount>2</channelcount></audio>" if has_audio else "")
+                + "</media></file>")
+        start, end = pos, pos + (cout - cin)
+        common = (f"<name>{escape(label)}</name><enabled>TRUE</enabled>"
                   f"<duration>{src_dur}</duration>{rate}<start>{start}</start><end>{end}</end>"
                   f"<in>{cin}</in><out>{cout}</out>")
         link = (f'<link><linkclipref>v-{i+1}</linkclipref><mediatype>video</mediatype></link>'
                 f'<link><linkclipref>a-{i+1}</linkclipref><mediatype>audio</mediatype></link>'
-                if c.has_audio else "")
+                if has_audio else "")
         v_items.append(f'<clipitem id="v-{i+1}">{common}{file_el}{link}</clipitem>')
-        if c.has_audio:
+        if has_audio:
             a_items.append(f'<clipitem id="a-{i+1}">{common}<file id="{fid}"/>'
                            f"<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex>"
                            f"</sourcetrack>{link}</clipitem>")
-        if i < len(clips) - 1:
-            tname = transitions[i][1]
-            v_items.append(
-                f"<transitionitem>{rate}<start>{end - half}</start><end>{end - half + tf}</end>"
-                f"<alignment>center</alignment><effect><name>Cross Dissolve</name>"
-                f"<effectid>Cross Dissolve</effectid><effectcategory>Dissolve</effectcategory>"
-                f"<effecttype>transition</effecttype><mediatype>video</mediatype></effect>"
-                f"</transitionitem>")
-            markers.append(
-                f"<marker><name>AtomX: {escape(tname)}</name>"
-                f"<comment>{escape(c.path.name)} -&gt; {escape(clips[i+1].path.name)}</comment>"
-                f"<in>{end}</in><out>-1</out></marker>")
-        if c.slow:
+        if i == 0 or entries[i - 1]["part"] != e["part"]:
+            markers.append(f"<marker><name>▶ {e['part']}</name><comment></comment>"
+                           f"<in>{start}</in><out>-1</out></marker>")
+        if "clip" in e and e["clip"].caption:
+            markers.append(f"<marker><name>ALTYAZI</name><comment>{escape(e['clip'].caption)}</comment>"
+                           f"<in>{start}</in><out>{end}</out></marker>")
+        if "clip" in e and e["clip"].slow:
+            c = e["clip"]
             at = start + fr(c.slow[0]) - cin
             markers.append(
                 f"<marker><name>SLOW-MO %{int(c.slow[2] * 100)}</name>"
                 f"<comment>{escape(c.path.name)}: {c.slow[1]:.1f} sn ağırlat "
                 f"(Time Remapping / Speed {int(c.slow[2] * 100)}%)</comment>"
                 f"<in>{at}</in><out>{at + fr(c.slow[1])}</out></marker>")
+        if i < n - 1:
+            half = tf_next // 2
+            v_items.append(
+                f"<transitionitem>{rate}<start>{end - half}</start><end>{end - half + tf_next}</end>"
+                f"<alignment>center</alignment><effect><name>Cross Dissolve</name>"
+                f"<effectid>Cross Dissolve</effectid><effectcategory>Dissolve</effectcategory>"
+                f"<effecttype>transition</effecttype><mediatype>video</mediatype></effect>"
+                f"</transitionitem>")
+            nxt = entries[i + 1]
+            nxt_name = nxt["logo"].name if "logo" in nxt else nxt["clip"].path.name
+            markers.append(
+                f"<marker><name>AtomX: {escape(e['tname'])}</name>"
+                f"<comment>{escape(label)} -&gt; {escape(nxt_name)}</comment>"
+                f"<in>{end}</in><out>-1</out></marker>")
         pos = end
+
+    music_track = ""
+    if music:
+        mdur = fr(media_duration(music))
+        if mdur > 0:
+            mlen = min(mdur, pos)
+            music_track = (
+                f'<track><clipitem id="music-1"><name>{escape(music.name)}</name><enabled>TRUE</enabled>'
+                f"<duration>{mdur}</duration>{rate}<start>0</start><end>{mlen}</end><in>0</in><out>{mlen}</out>"
+                f'<file id="file-music"><name>{escape(music.name)}</name>'
+                f"<pathurl>{escape(pathurl(music))}</pathurl>{rate}<duration>{mdur}</duration>"
+                f"<media><audio><channelcount>2</channelcount></audio></media></file>"
+                f"<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack>"
+                f"</clipitem></track>")
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE xmeml>
@@ -633,6 +740,7 @@ def premiere_xml(clips: list[Clip], out: Path, *, name: str, width: int, height:
 <track>
 {chr(10).join(a_items)}
 </track>
+{music_track}
 </audio>
 </media>
 {chr(10).join(markers)}
@@ -641,6 +749,69 @@ def premiere_xml(clips: list[Clip], out: Path, *, name: str, width: int, height:
 """
     out.write_text(xml, encoding="utf-8")
     print(f"✔ Premiere Pro timeline'ı hazır: {out}")
+
+
+def produce(clips: list[Clip], out_dir: Path, *, safe: str, name: str, title: str | None,
+            teaser_len: float, logo: Path | None, logo_dur: float, trans: float, style: str,
+            width: int, height: int, fps: int, music: Path | None, music_vol: float,
+            keep_clip_audio: bool, crf: int, preset: str, smooth_slowmo: bool,
+            quotes: list | None = None, do_render: bool = True, do_xml: bool = True,
+            progress=None) -> dict:
+    """Tam kurgu: [açılış fragmanı] -> [logo] -> ana video. MP4 + Premiere XML + CSV üretir.
+    progress: fonksiyon(oran 0..1, mesaj)."""
+    def stage(lo, hi, msg):
+        if not progress:
+            return None
+        return lambda x: progress(lo + (hi - lo) * x, f"{msg} %{int(x * 100)}")
+
+    teaser = build_teaser(clips, length=teaser_len, quotes=quotes) if teaser_len else []
+    if teaser:
+        print(f"\n▶ Açılış fragmanı: {len(teaser)} kesim")
+    if logo and not logo.exists():
+        logo = None
+    res = {"csv": f"{safe}_edit_plan.csv"}
+    write_plan(clips, out_dir / res["csv"], style)
+    if do_xml:
+        res["xml"] = f"{safe}_premiere.xml"
+        premiere_xml(clips, out_dir / res["xml"], name=name, width=width, height=height, fps=fps,
+                     trans=trans, style=style, teaser=teaser, logo=logo, logo_dur=logo_dur,
+                     music=music)
+    if not do_render:
+        return res
+    common = dict(width=width, height=height, fps=fps, music=music, music_vol=music_vol,
+                  keep_clip_audio=keep_clip_audio, crf=crf, preset=preset, smooth_slowmo=smooth_slowmo)
+    final = out_dir / f"{safe}.mp4"
+    parts: list[Path] = []
+    # ilerleme payları: fragman %20, logo %3, ana video geri kalanı
+    t_hi = 0.2 if teaser else 0.0
+    l_hi = t_hi + (0.03 if logo else 0.0)
+    if teaser:
+        p = out_dir / f".{safe}_1fragman.mp4"
+        render(teaser, p, trans=0.25, style="mix", title=None,
+               progress=stage(0, t_hi, "Açılış fragmanı oluşturuluyor"), **common)
+        parts.append(p)
+    if logo:
+        p = out_dir / f".{safe}_2logo.mp4"
+        if progress:
+            progress(t_hi, "Logo hazırlanıyor")
+        render_logo(logo, p, width=width, height=height, fps=fps, dur=logo_dur, crf=crf, preset=preset)
+        parts.append(p)
+    if parts:
+        p = out_dir / f".{safe}_3ana.mp4"
+        render(clips, p, trans=trans, style=style, title=title,
+               progress=stage(l_hi, 0.98, "Ana video oluşturuluyor"), **common)
+        parts.append(p)
+        if progress:
+            progress(0.99, "Birleştiriliyor")
+        concat_videos(parts, final)
+        for p in parts:
+            p.unlink(missing_ok=True)
+    else:
+        render(clips, final, trans=trans, style=style, title=title,
+               progress=stage(0, 0.98, "Video oluşturuluyor"), **common)
+    print(f"✔ Bitti: {final}")
+    res["video"] = final.name
+    return res
 
 
 def write_plan(clips: list[Clip], out: Path, style: str) -> None:
@@ -694,6 +865,8 @@ def main() -> None:
                     help="Hareket analizini atla (hızlı, ama otomatik slow-mo/en iyi an seçimi olmaz)")
     ap.add_argument("--teaser", type=float, default=0, metavar="SN",
                     help="Başa SN saniyelik açılış fragmanı ekle (en extreme anlar), ör. --teaser 30")
+    ap.add_argument("--logo", type=Path, help="Fragmandan sonra çıkacak logo (PNG ya da logo videosu)")
+    ap.add_argument("--logo-dur", type=float, default=3.0, help="Logo resmi kaç saniye ekranda kalsın")
     ap.add_argument("--recursive", action="store_true", help="Alt klasörleri de tara")
     ap.add_argument("--no-render", action="store_true", help="Sadece Premiere XML + liste üret")
     ap.add_argument("--no-xml", action="store_true", help="Premiere XML üretme")
@@ -729,30 +902,14 @@ def main() -> None:
               + (f"  🐢 slow-mo @ {c.slow[0]:.1f}s" if c.slow else ""))
 
     safe = re.sub(r"[^\w\-]+", "_", name).strip("_") or "offroad"
-    write_plan(clips, out_dir / f"{safe}_edit_plan.csv", a.transition)
-    if not a.no_xml:
-        premiere_xml(clips, out_dir / f"{safe}_premiere.xml", name=name, width=width,
-                     height=height, fps=a.fps, trans=a.trans_dur, style=a.transition)
-    if not a.no_render:
-        common = dict(width=width, height=height, fps=a.fps, music=a.music, music_vol=a.music_vol,
-                      keep_clip_audio=a.keep_clip_audio, crf=a.crf, preset=a.preset,
-                      smooth_slowmo=a.smooth_slowmo)
-        final = out_dir / f"{safe}.mp4"
-        try:
-            if a.teaser:
-                teaser = build_teaser(clips, length=a.teaser)
-                print(f"\n▶ Açılış fragmanı: {len(teaser)} kesim")
-                t_out, m_out = out_dir / f"{safe}_fragman.mp4", out_dir / f"{safe}_ana.mp4"
-                render(teaser, t_out, trans=0.25, style="mix", title=None, **common)
-                render(clips, m_out, trans=a.trans_dur, style=a.transition, title=a.title, **common)
-                concat_videos([t_out, m_out], final)
-                m_out.unlink(missing_ok=True)
-                print(f"✔ Fragman + ana video: {final}")
-            else:
-                render(clips, final, trans=a.trans_dur, style=a.transition, title=a.title, **common)
-        except RuntimeError as e:
-            sys.exit(f"HATA: {e}")
-
+    try:
+        produce(clips, out_dir, safe=safe, name=name, title=a.title, teaser_len=a.teaser,
+                logo=a.logo, logo_dur=a.logo_dur, trans=a.trans_dur, style=a.transition,
+                width=width, height=height, fps=a.fps, music=a.music, music_vol=a.music_vol,
+                keep_clip_audio=a.keep_clip_audio, crf=a.crf, preset=a.preset,
+                smooth_slowmo=a.smooth_slowmo, do_render=not a.no_render, do_xml=not a.no_xml)
+    except RuntimeError as e:
+        sys.exit(f"HATA: {e}")
 
 if __name__ == "__main__":
     main()

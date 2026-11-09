@@ -33,8 +33,14 @@ Tarayıcıda açılan video paneli – her şey tek ekranda:
 5. **Videoyu oluştur** – başlık, açılış fragmanı (15/30/45/60 sn), format (YouTube / Reels dikey), geçiş,
    slow-mo, müzik seç → 🎬. Bitince panelde izle, indir; Premiere Pro XML'i de indir.
 
-**Açılış fragmanı:** en başta turun en extreme anlarından hızlı kesimler (her videodan en hareketli an)
-ve ⭐ ile seçtiğin konuşmalar, çekim sırasıyla. Ardından başlık ve geçişli ana video gelir.
+**Video yapısı:** `açılış fragmanı (30 sn) → LOGO → ana video`
+- Fragman: turun en extreme anlarından hızlı kesimler + ⭐ ile seçtiğin konuşmalar (altyazılı).
+- Logo: “Logo” alanındaki ＋ ile yükle. PNG (şeffaf olabilir) ise flaş + zoom ile belirir;
+  hazır logo animasyonun (MP4/MOV) varsa o olduğu gibi oynar.
+- Ana video: başlık, çekim sırasıyla geçişli klipler, slow-mo'lar.
+
+**Premiere Pro:** İndirilen XML'de bu yapının tamamı var (fragman + logo + ana video + müzik A2'de).
+`▶ Fragman / ▶ Logo / ▶ Ana video` marker'ları bölümleri, `AtomX: ...` marker'ları her kesimi gösterir.
 
 Açmak için: Windows'ta `panel_ac.bat`'a, Mac'te `panel_ac.command`'a çift tıkla. Ya da:
 
