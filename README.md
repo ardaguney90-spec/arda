@@ -17,15 +17,51 @@ Extreme anları (zıplama, çamur, rampa) kendisi bulup **slow-motion** yapar ve
    her kesimde `AtomX: <önerilen geçiş>` ve extreme anlarda `SLOW-MO` marker'ı.
 6. **Liste** – `*_edit_plan.csv`: hangi klip hangi sırada, nereden kesildi, slow-mo nerede.
 
+## 🖥 Panel (önerilen)
+
+Tarayıcıda açılan video paneli – her şey tek ekranda:
+
+1. **Yükle** – videoları pencereye sürükle-bırak (ya da “＋ Video yükle”). Telefon, GoPro, dron karışık olabilir.
+2. **Çekim sırası** – en üstte kartlar çekim saatine göre dizilir. Kartı **sürükleyerek** sırayı değiştir,
+   “Dahil” işaretini kaldırarak videodan çıkar, 🗑 ile sil. “⏱ Çekim saatine göre sırala” ile otomatiğe döner.
+3. **İzle** – karta tıkla, büyük oynatıcıda izle (sıralamaya dokunmadan). “▶ Hepsini sırayla izle” ile tüm turu izle.
+4. **Konuşmalar** – “🎙 Yazıya dök”: konuşmalar yazıya dökülür, **küfürler otomatik kırmızı + bip** olur.
+   - Kelimeye tıkla → bip ekle/kaldır
+   - 🔇 → o satırı tamamen sessize al (gereksiz konuşmalar)
+   - ⭐ → o konuşmayı **açılış fragmanına** ekle (altyazılı, müzik o sırada kısılır)
+   - “bipli dinle” açıkken oynatıcıda bipler canlı duyulur
+5. **Videoyu oluştur** – başlık, açılış fragmanı (15/30/45/60 sn), format (YouTube / Reels dikey), geçiş,
+   slow-mo, müzik seç → 🎬. Bitince panelde izle, indir; Premiere Pro XML'i de indir.
+
+**Açılış fragmanı:** en başta turun en extreme anlarından hızlı kesimler (her videodan en hareketli an)
+ve ⭐ ile seçtiğin konuşmalar, çekim sırasıyla. Ardından başlık ve geçişli ana video gelir.
+
+Açmak için: Windows'ta `panel_ac.bat`'a, Mac'te `panel_ac.command`'a çift tıkla. Ya da:
+
+```bash
+python3 panel.py proje
+```
+
+Tarayıcıda `http://localhost:8000` açılır. Videolar `proje/videolar/`, çıktılar `proje/cikti/` içinde durur.
+Aynı Wi-Fi'deki arkadaşların telefondan yüklesin istersen: `python3 panel.py proje --host 0.0.0.0` →
+telefondan `http://BILGISAYAR_IP:8000`.
+
+### Küfür listesi
+`kufur_listesi.txt` – istediğin kelimeyi ekle/çıkar. `kelime*` = o harflerle başlayan her şey.
+Konuşma tanıma için ilk seferde Whisper modeli internetten iner (small ≈ 500 MB). Ekran kartı yoksa
+“Hızlı (base)” model daha çabuk, “Doğru (medium)” daha isabetli.
+
 ## Kurulum
 
 - Python 3.9+
 - [ffmpeg](https://ffmpeg.org/download.html) (`ffmpeg` ve `ffprobe` PATH'te olmalı)
   - Windows: `winget install ffmpeg` · macOS: `brew install ffmpeg`
 
-Ek Python paketi gerekmez.
+- Küfür bipleme için: `pip install -r requirements.txt` (faster-whisper)
 
-## Kullanım
+Sıralama/birleştirme için ek Python paketi gerekmez.
+
+## Komut satırı kullanımı
 
 Tüm videoları bir klasöre at (telefonlardan, GoPro'dan, dron'dan):
 
@@ -44,6 +80,8 @@ Instagram/TikTok için dikey:
 ```bash
 python3 offroad_edit.py ~/Videolar/kaz_daglari --res 1080x1920 --clip-len 4 --music muzik.mp3
 ```
+
+Başa 30 sn açılış fragmanı: `--teaser 30`. Sadece küfür bipleme: `python3 bleep.py KLASOR`.
 
 Çıktılar `KLASOR/_edit/` içine yazılır.
 

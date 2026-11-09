@@ -33,7 +33,8 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -112,6 +113,8 @@ class Clip:
     peak_t: float = 0.0
     peak_score: float = 0.0
     slow: tuple | None = None    # (kaynak başlangıç sn, kaynak süre sn, hız 0-1)
+    caption: str = ""            # ekranda altyazı (fragmandaki konuşmalar)
+    gain: float = 1.0            # müzik varken klip sesinin seviyesi çarpanı
 
 
 def probe(path: Path) -> Clip | None:
@@ -310,17 +313,105 @@ def pick_transitions(n: int, style: str) -> list[tuple[str, str]]:
     return [found] * n
 
 
+def caption_filter(text: str, tmpdir: Path, i: int) -> str:
+    f = tmpdir / f"cap{i}.txt"
+    f.write_text(text, encoding="utf-8")
+    path = f.as_posix().replace(":", "\\:")
+    return (f"drawtext=textfile='{path}':fontcolor=white:fontsize=h/18:"
+            f"box=1:boxcolor=black@0.55:boxborderw=18:x=(w-text_w)/2:y=h-text_h-h/10")
+
+
+def top_moments(c: Clip, window: float, k: int) -> list[tuple[float, float]]:
+    """Klipteki birbirine çakışmayan en hareketli k an: [(merkez_sn, skor)]."""
+    if not c.motion:
+        return []
+    w = max(1, int(window * 10))
+    scored = []
+    for i in range(0, max(1, len(c.motion) - w + 1)):
+        seg = c.motion[i:i + w]
+        scored.append((seg[0][0] + window / 2, sum(x for _, x in seg) / len(seg)))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    picked: list[tuple[float, float]] = []
+    for t, sc in scored:
+        if all(abs(t - p) >= window * 1.5 for p, _ in picked):
+            picked.append((t, sc))
+        if len(picked) >= k:
+            break
+    return picked
+
+
+def build_teaser(clips: list[Clip], *, length: float = 30.0, cut: float = 2.0,
+                 trans: float = 0.25, quotes: list[tuple[Clip, float, float, str]] | None = None
+                 ) -> list[Clip]:
+    """Açılış fragmanı: en extreme anlardan hızlı kesimler + seçilen konuşma kesitleri.
+
+    quotes: [(klip, başlangıç_sn, bitiş_sn, yazı)] – konuşma kesitleri (altyazılı, ses yüksek).
+    Döner: render()'a verilebilecek kısa klip listesi (çekim sırasına göre).
+    """
+    items: list[tuple[float, Clip]] = []   # (sıralama anahtarı, klip parçası)
+    budget = length
+    for q_clip, qs, qe, text in (quotes or []):
+        qs, qe = max(0.0, qs - 0.15), min(q_clip.duration, qe + 0.25)
+        qe = min(qe, qs + 7.0)
+        if qe - qs < 0.8 or budget - (qe - qs - trans) < cut:
+            continue
+        part = replace(q_clip, start=qs, src_len=qe - qs, length=qe - qs, motion=[], slow=None,
+                       caption=text, gain=3.0)
+        items.append((q_clip.shot_at.timestamp() + qs, part))
+        budget -= part.length - trans
+
+    per_clip = [(c, top_moments(c, cut, 3)) for c in clips]
+    cand = sorted(((m[0][1], c, m[0][0]) for c, m in per_clip if m), key=lambda x: -x[0])
+    cand += sorted(((sc, c, t) for c, m in per_clip for t, sc in m[1:]), key=lambda x: -x[0])
+    for sc, c, t in cand:   # önce her klibin en iyi anı, sonra ikinci/üçüncü anlar
+        if budget < cut * 0.6:
+            break
+        dur = min(cut, budget + trans, c.duration)
+        st = min(max(0.0, t - dur / 2), max(0.0, c.duration - dur))
+        if any(p.path == c.path and abs(p.start - st) < dur for _, p in items):
+            continue
+        part = replace(c, start=st, src_len=dur, length=dur, motion=[], slow=None, caption="", gain=1.0)
+        items.append((c.shot_at.timestamp() + st, part))
+        budget -= dur - trans
+    # hiç hareket analizi yoksa: her klibin ortasından
+    if not cand and not items:
+        for c in clips:
+            if budget < cut * 0.6:
+                break
+            dur = min(cut, c.duration)
+            st = max(0.0, c.duration / 2 - dur / 2)
+            items.append((c.shot_at.timestamp() + st,
+                          replace(c, start=st, src_len=dur, length=dur, motion=[], slow=None)))
+            budget -= dur - trans
+    items.sort(key=lambda x: x[0])
+    return [p for _, p in items]
+
+
+def concat_videos(parts: list[Path], out: Path) -> None:
+    """Aynı ayarlarla render edilmiş videoları yeniden kodlamadan uç uca ekler."""
+    lst = out.with_suffix(".concat.txt")
+    lst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in parts), encoding="utf-8")
+    r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "concat",
+                        "-safe", "0", "-i", str(lst), "-c", "copy", "-movflags", "+faststart",
+                        str(out)], capture_output=True, text=True)
+    lst.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError("Birleştirme (concat) başarısız:\n" + r.stderr[-1500:])
+
+
 # --------------------------------------------------------------------------- #
 # 1) ffmpeg ile birleştirme
 # --------------------------------------------------------------------------- #
 def render(clips: list[Clip], out: Path, *, width: int, height: int, fps: int,
            trans: float, style: str, music: Path | None, music_vol: float,
            keep_clip_audio: bool, title: str | None, crf: int, preset: str,
-           smooth_slowmo: bool) -> None:
+           smooth_slowmo: bool, progress=None) -> float:
+    """progress: isteğe bağlı fonksiyon(0..1) – panel ilerleme çubuğu için."""
     n = len(clips)
     transitions = pick_transitions(max(n - 1, 0), style)
     inputs: list[str] = []
     fc: list[str] = []
+    tmpdir = Path(tempfile.mkdtemp(prefix="offroad_"))
 
     for c in clips:
         inputs += ["-ss", f"{c.start:.3f}", "-t", f"{c.src_len:.3f}", "-i", str(c.path)]
@@ -340,6 +431,15 @@ def render(clips: list[Clip], out: Path, *, width: int, height: int, fps: int,
 
     # Görüntü: hepsini aynı çözünürlük/fps'e getir. Dikey videolar için
     # arkaya bulanık kopyası konur (siyah bant yerine).
+    def clip_gain(c: Clip) -> float:
+        # Müzik yoksa klip sesi olduğu gibi. Müzik varsa motor sesi kısık (ya da kapalı),
+        # konuşma kesitleri (altyazılı olanlar) her zaman duyulur.
+        if not music:
+            return 1.0
+        if c.caption:
+            return 1.1
+        return 0.35 * c.gain if keep_clip_audio else 0.0
+
     for i, c in enumerate(clips):
         afmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
         if c.slow:
@@ -359,24 +459,27 @@ def render(clips: list[Clip], out: Path, *, width: int, height: int, fps: int,
                 f"[{i}b0]atrim=0:{s0:.3f},asetpts=PTS-STARTPTS[{i}c0];"
                 f"[{i}b1]atrim={s0:.3f}:{s1:.3f},asetpts=PTS-STARTPTS,{atempo_chain(c.slow[2])}[{i}c1];"
                 f"[{i}b2]atrim={s1:.3f},asetpts=PTS-STARTPTS[{i}c2];"
-                f"[{i}c0][{i}c1][{i}c2]concat=n=3:v=0:a=1[a{i}]")
+                f"[{i}c0][{i}c1][{i}c2]concat=n=3:v=0:a=1,volume={clip_gain(c):.3f}[a{i}]")
         else:
             fc.append(f"[{i}:v]settb=AVTB,setpts=PTS-STARTPTS,fps={fps}[{i}raw]")
-            fc.append(f"[{audio_idx[i]}]asetpts=PTS-STARTPTS,{afmt}[a{i}]")
+            fc.append(f"[{audio_idx[i]}]asetpts=PTS-STARTPTS,{afmt},volume={clip_gain(c):.3f}[a{i}]")
         fc.append(
             f"[{i}raw]split[{i}fg0][{i}bg0];"
             f"[{i}bg0]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},boxblur=20:5,eq=brightness=-0.08[{i}bg];"
             f"[{i}fg0]scale={width}:{height}:force_original_aspect_ratio=decrease[{i}fg];"
-            f"[{i}bg][{i}fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p,fps={fps},settb=1/{fps}[v{i}]"
+            f"[{i}bg][{i}fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p,fps={fps},settb=1/{fps}"
+            + (f",{caption_filter(c.caption, tmpdir, i)}" if c.caption else "") + f"[v{i}]"
         )
 
     # xfade zinciri
     vlast, alast = "v0", "a0"
     offset = clips[0].length
+    starts = [0.0]
     for i in range(1, n):
         t = min(trans, clips[i - 1].length / 2, clips[i].length / 2)
         offset -= t
+        starts.append(offset)
         name = transitions[i - 1][0]
         fc.append(f"[{vlast}][v{i}]xfade=transition={name}:duration={t:.3f}:offset={offset:.3f}[vx{i}]")
         fc.append(f"[{alast}][a{i}]acrossfade=d={t:.3f}:c1=tri:c2=tri[ax{i}]")
@@ -399,27 +502,44 @@ def render(clips: list[Clip], out: Path, *, width: int, height: int, fps: int,
     if music_input is not None:
         fc.append(f"[{music_input}:a]atrim=0:{total:.3f},asetpts=PTS-STARTPTS,"
                   f"aformat=sample_fmts=fltp:channel_layouts=stereo,volume={music_vol}[mus]")
-        if keep_clip_audio:
-            fc.append(f"[{alast}]volume=0.35[ca];[ca][mus]amix=inputs=2:duration=first:normalize=0[amix]")
+        # konuşma kesitlerinde müziği kıs (ducking)
+        duck = "+".join(f"between(t,{starts[i]:.3f},{starts[i] + c.length:.3f})"
+                        for i, c in enumerate(clips) if c.caption)
+        if duck:
+            fc.append(f"[mus]volume=0.2:enable='{duck}'[musd]")
+        mus = "musd" if duck else "mus"
+        if keep_clip_audio or duck:
+            fc.append(f"[{alast}][{mus}]amix=inputs=2:duration=first:normalize=0[amix]")
             alast = "amix"
         else:
-            alast = "mus"
+            alast = mus
     fc.append(f"[{alast}]afade=t=in:st=0:d=0.8,afade=t=out:st={max(total - 2, 0):.3f}:d=2[aout]")
 
     script = out.with_suffix(".filtergraph.txt")
     script.write_text(";\n".join(fc))
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats", *inputs,
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           *(["-progress", "pipe:1", "-nostats"] if progress else ["-stats"]), *inputs,
            "-filter_complex_script", str(script),
            "-map", "[vout]", "-map", "[aout]",
            "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
            "-t", f"{total:.3f}", str(out)]
     print(f"\n▶ Render başlıyor: {n} klip, ~{total:.0f} sn -> {out.name}")
-    r = subprocess.run(cmd)
-    if r.returncode != 0:
-        sys.exit("HATA: ffmpeg render başarısız (filtre grafiği: %s)" % script)
+    if progress:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            if line.startswith("out_time_us=") and line.strip()[12:].isdigit():
+                progress(min(1.0, int(line.strip()[12:]) / 1e6 / max(total, 0.1)))
+        err = proc.stderr.read()
+        rc = proc.wait()
+    else:
+        rc, err = subprocess.run(cmd).returncode, ""
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg render başarısız (filtre grafiği: {script})\n{err[-2000:]}")
     script.unlink(missing_ok=True)
+    shutil.rmtree(tmpdir, ignore_errors=True)
     print(f"✔ Birleştirilmiş video hazır: {out}")
+    return total
 
 
 # --------------------------------------------------------------------------- #
@@ -572,6 +692,8 @@ def main() -> None:
                     help="Düşük fps çekimlerde ara kare üret (çok daha akıcı ama render yavaşlar)")
     ap.add_argument("--no-analyze", action="store_true",
                     help="Hareket analizini atla (hızlı, ama otomatik slow-mo/en iyi an seçimi olmaz)")
+    ap.add_argument("--teaser", type=float, default=0, metavar="SN",
+                    help="Başa SN saniyelik açılış fragmanı ekle (en extreme anlar), ör. --teaser 30")
     ap.add_argument("--recursive", action="store_true", help="Alt klasörleri de tara")
     ap.add_argument("--no-render", action="store_true", help="Sadece Premiere XML + liste üret")
     ap.add_argument("--no-xml", action="store_true", help="Premiere XML üretme")
@@ -591,7 +713,7 @@ def main() -> None:
         sys.exit("HATA: klasörde video bulunamadı.")
     manual = read_slowmo_file(a.slowmo_file) if a.slowmo_file else {}
     slow_n = a.slowmo if a.slowmo is not None else max(1, len(clips) // 3)
-    if not a.no_analyze and (slow_n > 0 or a.clip_len) and not manual:
+    if not a.no_analyze and (slow_n > 0 or a.clip_len or a.teaser) and not manual:
         print("▶ Hareket analizi (extreme anları buluyor)...")
         for c in clips:
             analyze_motion(c, a.slowmo_len)
@@ -612,10 +734,24 @@ def main() -> None:
         premiere_xml(clips, out_dir / f"{safe}_premiere.xml", name=name, width=width,
                      height=height, fps=a.fps, trans=a.trans_dur, style=a.transition)
     if not a.no_render:
-        render(clips, out_dir / f"{safe}.mp4", width=width, height=height, fps=a.fps,
-               trans=a.trans_dur, style=a.transition, music=a.music, music_vol=a.music_vol,
-               keep_clip_audio=a.keep_clip_audio, title=a.title, crf=a.crf, preset=a.preset,
-               smooth_slowmo=a.smooth_slowmo)
+        common = dict(width=width, height=height, fps=a.fps, music=a.music, music_vol=a.music_vol,
+                      keep_clip_audio=a.keep_clip_audio, crf=a.crf, preset=a.preset,
+                      smooth_slowmo=a.smooth_slowmo)
+        final = out_dir / f"{safe}.mp4"
+        try:
+            if a.teaser:
+                teaser = build_teaser(clips, length=a.teaser)
+                print(f"\n▶ Açılış fragmanı: {len(teaser)} kesim")
+                t_out, m_out = out_dir / f"{safe}_fragman.mp4", out_dir / f"{safe}_ana.mp4"
+                render(teaser, t_out, trans=0.25, style="mix", title=None, **common)
+                render(clips, m_out, trans=a.trans_dur, style=a.transition, title=a.title, **common)
+                concat_videos([t_out, m_out], final)
+                m_out.unlink(missing_ok=True)
+                print(f"✔ Fragman + ana video: {final}")
+            else:
+                render(clips, final, trans=a.trans_dur, style=a.transition, title=a.title, **common)
+        except RuntimeError as e:
+            sys.exit(f"HATA: {e}")
 
 
 if __name__ == "__main__":

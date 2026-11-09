@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offroad Edit Paneli</title>
+<style>
+:root{
+  --bg:#14130f; --panel:#1e1c17; --panel2:#27241d; --line:#3a352a; --text:#efe9dc; --muted:#a59c88;
+  --accent:#e08a2c; --accent2:#f2b35e; --red:#e5484d; --green:#46a758; --blue:#4a90d9; --star:#f5c518;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#1a1205;font-weight:600}
+button.primary:hover{background:var(--accent2)}
+a{color:var(--accent2)}
+a button{color:var(--text)}
+a button.primary{color:#1a1205}
+button:disabled{opacity:.5;cursor:not-allowed}
+input,select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:18px;margin:0;margin-right:auto}
+header h1 span{color:var(--accent)}
+.muted{color:var(--muted)}
+section{padding:14px 20px}
+h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+h2 .sp{flex:1}
+
+/* sıralama şeridi */
+#strip{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 12px;min-height:150px}
+.card{flex:0 0 190px;background:var(--panel);border:2px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;position:relative;user-select:none}
+.card.active{border-color:var(--accent)}
+.card.excluded{opacity:.4}
+.card.dragging{opacity:.3}
+.card.dropl{box-shadow:-4px 0 0 var(--accent)}
+.card.dropr{box-shadow:4px 0 0 var(--accent)}
+.card img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000}
+.card .num{position:absolute;top:6px;left:6px;background:var(--accent);color:#1a1205;font-weight:700;border-radius:6px;padding:0 7px}
+.card .dur{position:absolute;top:6px;right:6px;background:#000a;border-radius:6px;padding:0 6px;font-size:12px}
+.card .body{padding:6px 8px}
+.card .name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .meta{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:4px}
+.card .badges{display:flex;gap:4px;font-size:11px;margin-top:3px;min-height:16px}
+.card label{display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer}
+.empty{border:2px dashed var(--line);border-radius:12px;padding:30px;text-align:center;color:var(--muted);flex:1}
+
+/* izleme + konuşmalar */
+.grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+video{width:100%;max-height:60vh;background:#000;border-radius:8px;display:block}
+.pbar{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+#nowname{font-weight:600;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+#tr{max-height:60vh;overflow:auto;margin-top:8px}
+.line{display:flex;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);align-items:flex-start}
+.line.muted-line .words{text-decoration:line-through;opacity:.55}
+.line.playing{background:#e08a2c18}
+.line .t{font-variant-numeric:tabular-nums;color:var(--accent2);cursor:pointer;min-width:44px;font-size:12px;padding-top:2px}
+.line .words{flex:1}
+.w{cursor:pointer;border-radius:4px;padding:0 2px}
+.w:hover{background:var(--panel2)}
+.w.bad{background:var(--red);color:#fff}
+.w.cur{outline:1px solid var(--accent2)}
+.line .act{display:flex;gap:4px}
+.line .act button{padding:2px 6px;font-size:12px}
+.line .act button.on{border-color:var(--accent);background:#e08a2c33}
+.legend{font-size:12px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;margin-top:6px}
+
+/* ayarlar */
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.form label.chk{flex-direction:row;align-items:center;color:var(--text);font-size:13px}
+.progress{height:10px;background:var(--panel2);border-radius:6px;overflow:hidden;margin:6px 0}
+.progress div{height:100%;background:var(--accent);width:0;transition:width .4s}
+#jobs .job{font-size:12px;margin:6px 0}
+.job.error{color:var(--red)}
+#result video{max-height:50vh}
+#drop{position:fixed;inset:0;background:#e08a2c33;border:4px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:28px;font-weight:700;z-index:20;pointer-events:none}
+body.dragover #drop{display:flex}
+#uploads .u{font-size:12px;display:flex;gap:8px;align-items:center}
+#uploads .u .progress{flex:1}
+.toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--accent);padding:10px 14px;border-radius:10px;z-index:30}
+</style>
+</head>
+<body>
+<div id="drop">Videoları buraya bırak 🚙</div>
+<header>
+  <h1>🚙 Offroad <span>Edit Paneli</span></h1>
+  <span class="muted" id="proj"></span>
+  <button class="primary" onclick="pick('video')">＋ Video yükle</button>
+  <input type="file" id="fileVideo" accept="video/*,.mts,.m2ts,.insv,.lrv" multiple hidden>
+  <input type="file" id="fileMusic" accept="audio/*" hidden>
+</header>
+
+<section>
+  <h2>1 · Çekim sırası <span class="muted" id="ordermode"></span><span class="sp"></span>
+    <button onclick="api('/api/sort',{}).then(refresh)">⏱ Çekim saatine göre sırala</button>
+    <button onclick="playAll()">▶ Hepsini sırayla izle</button>
+  </h2>
+  <div id="strip"></div>
+  <div id="uploads"></div>
+  <div class="muted" style="font-size:12px">Kartı tutup sürükleyerek sırayı değiştir · Tıklayınca izle · “Dahil” işaretini kaldırırsan videoya girmez</div>
+</section>
+
+<section class="grid">
+  <div class="box">
+    <video id="player" controls playsinline></video>
+    <div class="pbar">
+      <span id="nowname" class="muted">Bir video seç</span>
+      <button onclick="step(-1)">⏮</button><button onclick="step(1)">⏭</button>
+      <label class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center">
+        <input type="checkbox" id="bipPreview" checked> bipli dinle</label>
+    </div>
+  </div>
+  <div class="box">
+    <h2>2 · Konuşmalar <span class="sp"></span>
+      <select id="model" title="Büyük model = daha doğru ama yavaş">
+        <option value="base">Hızlı (base)</option><option value="small">Normal (small)</option>
+        <option value="medium">Doğru (medium)</option><option value="large-v3">En doğru (large-v3)</option>
+      </select>
+      <button id="trBtn" onclick="transcribe()">🎙 Yazıya dök</button>
+    </h2>
+    <div class="progress" id="trProg" style="display:none"><div></div></div>
+    <div id="tr" class="muted">Videoyu seçip “Yazıya dök”e bas. Küfürler otomatik bulunup biplenir.</div>
+    <div class="legend">
+      <span><span class="w bad">kelime</span> = biplenecek (tıkla: ekle/kaldır)</span>
+      <span>🔇 = satırı sessize al (gereksiz konuşma)</span>
+      <span>⭐ = açılış fragmanına ekle</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="box">
+    <h2>3 · Videoyu oluştur</h2>
+    <div class="form" id="form">
+      <label>Başlık (açılışta görünür)<input name="title" placeholder="Kaz Dağları Offroad 2026"></label>
+      <label>Açılış fragmanı (en iyi anlar)
+        <select name="teaser"><option value="0">Yok</option><option value="15">15 sn</option>
+          <option value="30">30 sn</option><option value="45">45 sn</option><option value="60">60 sn</option></select></label>
+      <label>Her videodan en fazla (sn, boş = tamamı)<input name="clip_len" type="number" min="2" step="1" placeholder="tamamı"></label>
+      <label>Format
+        <select name="res"><option value="1920x1080">Yatay 1080p (YouTube)</option>
+          <option value="3840x2160">Yatay 4K</option><option value="1080x1920">Dikey (Reels/TikTok)</option>
+          <option value="1080x1080">Kare</option></select></label>
+      <label>Geçişler
+        <select name="transition"><option value="mix">Karışık (aksiyon)</option><option value="zoomin">Zoom</option>
+          <option value="slideleft">Whip pan / kaydırma</option><option value="fadewhite">Flaş</option>
+          <option value="dissolve">Yumuşak geçiş</option><option value="circleopen">Daire</option><option value="pixelize">Glitch</option></select></label>
+      <label>Geçiş süresi (sn)<input name="trans_dur" type="number" min="0.2" max="2" step="0.1"></label>
+      <label>Slow-motion sayısı
+        <select name="slowmo"><option value="-1">Otomatik (en extreme 1/3)</option><option value="0">Kapalı</option>
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="5">5</option><option value="8">8</option></select></label>
+      <label>Slow-motion hızı
+        <select name="slowmo_speed"><option value="0.5">%50 (2x yavaş)</option><option value="0.4">%40 (2.5x)</option>
+          <option value="0.25">%25 (4x)</option></select></label>
+      <label>Kayıt başındaki sarsıntıyı at (sn)<input name="skip_start" type="number" min="0" max="5" step="0.5"></label>
+      <label>Müzik
+        <span style="display:flex;gap:6px"><select name="music" id="musicSel" style="flex:1"></select>
+        <button type="button" onclick="pick('music')">＋</button></span></label>
+      <label class="chk"><input type="checkbox" name="keep_clip_audio"> Müzik varken motor sesini kısık tut</label>
+      <label>Kalite
+        <select name="quality"><option value="hizli">Hızlı önizleme</option><option value="iyi">İyi (paylaşım)</option></select></label>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="primary" id="renderBtn" onclick="render()">🎬 Videoyu oluştur</button>
+      <span class="muted" id="renderInfo"></span>
+    </div>
+    <div class="progress" id="rProg" style="display:none"><div></div></div>
+    <div id="rMsg" class="muted"></div>
+    <div id="result"></div>
+  </div>
+</section>
+
+<section>
+  <h2>Çıktılar</h2>
+  <div id="outputs" class="muted"></div>
+</section>
+
+<script>
+let S = null;           // sunucu durumu
+let cur = null;         // izlenen video adı
+let T = null;           // açık transkript {transcript, bleeps, quotes}
+let playlist = false;
+const $ = s => document.querySelector(s);
+const player = $('#player');
+const fmt = s => { s = Math.max(0, s); const m = Math.floor(s / 60); return m + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const enc = encodeURIComponent;
+
+async function api(url, body) {
+  const r = await fetch(url, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (j.error) { toast('⚠ ' + j.error); throw new Error(j.error); }
+  return j;
+}
+function toast(msg) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = msg; document.body.append(d); setTimeout(() => d.remove(), 3500); }
+
+/* ---------------- durum ---------------- */
+async function refresh() {
+  S = await api('/api/state');
+  $('#proj').textContent = S.project;
+  $('#ordermode').textContent = S.manual_order ? '(elle sıralandı)' : '(çekim saatine göre)';
+  drawStrip(); drawSettings(); drawJobs(); drawOutputs();
+}
+
+function drawStrip() {
+  const el = $('#strip');
+  if (!S.videos.length) { el.innerHTML = '<div class="empty">Videoları buraya sürükle ya da “＋ Video yükle”ye bas.<br>Telefon, GoPro, dron… karışık olabilir; çekim saatine göre otomatik dizilir.</div>'; return; }
+  let n = 0;
+  el.innerHTML = S.videos.map(v => {
+    const num = v.excluded ? '–' : ++n;
+    const [d, t] = v.shot_at.split(' ');
+    return `<div class="card ${v.excluded ? 'excluded' : ''} ${v.name === cur ? 'active' : ''}" draggable="true" data-name="${esc(v.name)}">
+      <img loading="lazy" src="/thumb/${enc(v.name)}" alt="">
+      <span class="num">${num}</span><span class="dur">${fmt(v.duration)}</span>
+      <div class="body">
+        <div class="name" title="${esc(v.name)}">${esc(v.name)}</div>
+        <div class="meta"><span title="Kaynak: ${esc(v.time_source)}">${d.slice(8)}.${d.slice(5,7)} ${t.slice(0,5)}${v.time_source === 'dosya tarihi' ? ' ?' : ''}</span>
+          <label onclick="event.stopPropagation()"><input type="checkbox" ${v.excluded ? '' : 'checked'} onchange="exclude('${esc(v.name)}', !this.checked)"> Dahil</label></div>
+        <div class="badges">${v.transcribed ? '<span title="Yazıya döküldü">🎙</span>' : ''}${v.bleeps ? `<span title="Bip">🤬 ${v.bleeps}</span>` : ''}${v.quotes ? `<span title="Fragmanda">⭐ ${v.quotes}</span>` : ''}
+          <span style="margin-left:auto;cursor:pointer" title="Sil" onclick="event.stopPropagation();del('${esc(v.name)}')">🗑</span></div>
+      </div></div>`;
+  }).join('');
+  el.querySelectorAll('.card').forEach(c => {
+    c.onclick = () => openVideo(c.dataset.name, true);
+    c.ondragstart = e => { c.classList.add('dragging'); e.dataTransfer.setData('text/x-card', c.dataset.name); e.dataTransfer.effectAllowed = 'move'; };
+    c.ondragend = () => c.classList.remove('dragging');
+    c.ondragover = e => { if (!e.dataTransfer.types.includes('text/x-card')) return; e.preventDefault(); const r = c.getBoundingClientRect(); const left = e.clientX < r.left + r.width / 2; c.classList.toggle('dropl', left); c.classList.toggle('dropr', !left); };
+    c.ondragleave = () => c.classList.remove('dropl', 'dropr');
+    c.ondrop = async e => {
+      const from = e.dataTransfer.getData('text/x-card'); if (!from) return;
+      e.preventDefault(); e.stopPropagation();
+      const left = c.classList.contains('dropl'); c.classList.remove('dropl', 'dropr');
+      if (from === c.dataset.name) return;
+      const order = S.videos.map(v => v.name).filter(n => n !== from);
+      let i = order.indexOf(c.dataset.name); if (!left) i++;
+      order.splice(i, 0, from);
+      await api('/api/order', {order}); refresh();
+    };
+  });
+}
+
+async function exclude(name, ex) { await api('/api/exclude', {name, excluded: ex}); refresh(); }
+async function del(name) { if (!confirm(name + ' silinsin mi?')) return; await api('/api/delete', {name}); if (cur === name) cur = null; refresh(); }
+
+/* ---------------- izleme ---------------- */
+async function openVideo(name, autoplay) {
+  cur = name;
+  player.src = '/files/videolar/' + enc(name);
+  $('#nowname').textContent = name; $('#nowname').classList.remove('muted');
+  document.querySelectorAll('.card').forEach(c => c.classList.toggle('active', c.dataset.name === name));
+  if (autoplay) player.play().catch(() => {});
+  await loadTranscript();
+}
+function included() { return S.videos.filter(v => !v.excluded).map(v => v.name); }
+function step(d) {
+  const list = S.videos.map(v => v.name); if (!list.length) return;
+  let i = list.indexOf(cur) + d; if (i < 0) i = list.length - 1; if (i >= list.length) i = 0;
+  openVideo(list[i], true);
+}
+function playAll() { const l = included(); if (!l.length) return; playlist = true; openVideo(l[0], true); toast('Sırayla oynatılıyor…'); }
+player.onended = () => {
+  if (!playlist) return;
+  const l = included(); const i = l.indexOf(cur);
+  if (i >= 0 && i < l.length - 1) openVideo(l[i + 1], true); else playlist = false;
+};
+
+/* bip önizleme: işaretli yerlerde sesi kıs, bip çal */
+let actx = null, osc = null, og = null;
+function beep(on) {
+  if (on && !actx) { actx = new AudioContext(); osc = actx.createOscillator(); og = actx.createGain(); osc.frequency.value = 1000; og.gain.value = 0; osc.connect(og).connect(actx.destination); osc.start(); }
+  if (og) og.gain.setTargetAtTime(on ? 0.15 : 0, actx.currentTime, 0.005);
+}
+function bipLoop() {
+  if (T && !player.paused && $('#bipPreview').checked) {
+    const t = player.currentTime, pad = 0.06;
+    const hit = T.bleeps.find(b => t >= b.start - pad && t <= b.end + pad);
+    player.muted = !!hit; beep(hit && hit.mode !== 'sessiz');
+  } else if (og) { beep(false); player.muted = false; }
+  highlightLine();
+  requestAnimationFrame(bipLoop);
+}
+requestAnimationFrame(bipLoop);
+
+/* ---------------- konuşmalar ---------------- */
+async function loadTranscript() {
+  if (!cur) return;
+  T = await api('/api/transcript?name=' + enc(cur));
+  drawTranscript();
+}
+function isBleeped(w) { return T.bleeps.some(b => b.mode !== 'sessiz' && w.s < b.end && w.e > b.start); }
+function lineMuted(seg) { return T.bleeps.some(b => b.mode === 'sessiz' && Math.abs(b.start - seg.start) < 0.01 && Math.abs(b.end - seg.end) < 0.01); }
+function lineQuoted(seg) { return T.quotes.some(q => Math.abs(q.start - seg.start) < 0.01); }
+
+function drawTranscript() {
+  const el = $('#tr');
+  const job = S && S.jobs.find(j => j.kind === 'transcribe' && j.status === 'running' && j.label.endsWith(cur));
+  $('#trBtn').disabled = !!job;
+  $('#trProg').style.display = job ? '' : 'none';
+  if (job) $('#trProg div').style.width = (job.progress * 100) + '%';
+  if (!T || !T.transcript) { el.className = 'muted'; el.innerHTML = job ? esc(job.message) : 'Bu video henüz yazıya dökülmedi. “🎙 Yazıya dök”e bas.'; return; }
+  const segs = T.transcript.segments;
+  el.className = '';
+  if (!segs.length) { el.innerHTML = '<span class="muted">Konuşma bulunamadı.</span>'; return; }
+  el.innerHTML = segs.map((s, i) => `<div class="line ${lineMuted(s) ? 'muted-line' : ''}" data-i="${i}">
+      <span class="t" onclick="seek(${s.start})">${fmt(s.start)}</span>
+      <span class="words">${s.words.map((w, j) => `<span class="w ${isBleeped(w) ? 'bad' : ''}" data-i="${i}" data-j="${j}">${esc(w.w)}</span>`).join(' ') || esc(s.text)}</span>
+      <span class="act"><button title="Gereksiz konuşma: satırı sessize al" class="${lineMuted(s) ? 'on' : ''}" onclick="toggleMute(${i})">🔇</button>
+        <button title="Açılış fragmanına ekle" class="${lineQuoted(s) ? 'on' : ''}" onclick="toggleQuote(${i})">⭐</button></span></div>`).join('');
+  el.querySelectorAll('.w').forEach(w => {
+    w.onclick = () => toggleWord(+w.dataset.i, +w.dataset.j);
+    w.oncontextmenu = e => { e.preventDefault(); const x = segs[+w.dataset.i].words[+w.dataset.j]; seek(x.s); };
+  });
+}
+function seek(t) { player.currentTime = Math.max(0, t - 0.5); player.play().catch(() => {}); }
+function highlightLine() {
+  if (!T || !T.transcript) return;
+  const t = player.currentTime;
+  document.querySelectorAll('#tr .line').forEach(l => {
+    const s = T.transcript.segments[+l.dataset.i];
+    l.classList.toggle('playing', t >= s.start && t <= s.end);
+  });
+}
+async function saveEdits() {
+  await api('/api/edits', {name: cur, bleeps: T.bleeps, quotes: T.quotes});
+  drawTranscript();
+  const v = S.videos.find(v => v.name === cur); if (v) { v.bleeps = T.bleeps.length; v.quotes = T.quotes.length; drawStrip(); }
+}
+function toggleWord(i, j) {
+  const w = T.transcript.segments[i].words[j];
+  const hits = T.bleeps.filter(b => b.mode !== 'sessiz' && w.s < b.end && w.e > b.start);
+  if (hits.length) T.bleeps = T.bleeps.filter(b => !hits.includes(b));
+  else T.bleeps.push({start: w.s, end: w.e, mode: 'bip', text: w.w});
+  saveEdits();
+}
+function toggleMute(i) {
+  const s = T.transcript.segments[i];
+  if (lineMuted(s)) T.bleeps = T.bleeps.filter(b => !(b.mode === 'sessiz' && Math.abs(b.start - s.start) < 0.01));
+  else T.bleeps.push({start: s.start, end: s.end, mode: 'sessiz', text: s.text});
+  saveEdits();
+}
+function toggleQuote(i) {
+  const s = T.transcript.segments[i];
+  if (lineQuoted(s)) T.quotes = T.quotes.filter(q => Math.abs(q.start - s.start) >= 0.01);
+  else T.quotes.push({start: s.start, end: s.end, text: s.text});
+  saveEdits();
+}
+async function transcribe() {
+  if (!cur) return toast('Önce bir video seç');
+  await api('/api/settings', {whisper_model: $('#model').value});
+  await api('/api/transcribe', {name: cur, model: $('#model').value});
+  refresh(); poll();
+}
+
+/* ---------------- ayarlar + render ---------------- */
+let settingsDrawn = false;
+function drawSettings() {
+  $('#musicSel').innerHTML = '<option value="">Yok (klip sesleri)</option>' + S.music.map(m => `<option>${esc(m)}</option>`).join('');
+  if (settingsDrawn && document.activeElement && $('#form').contains(document.activeElement)) return;
+  for (const el of $('#form').querySelectorAll('[name]')) {
+    const v = S.settings[el.name]; if (v === undefined) continue;
+    if (el.type === 'checkbox') { el.checked = !!v; continue; }
+    if (el.tagName === 'SELECT' && v !== '' && ![...el.options].some(o => o.value === String(v)))
+      el.add(new Option(String(v), String(v)));
+    el.value = v;
+  }
+  $('#model').value = S.settings.whisper_model;
+  settingsDrawn = true;
+  const inc = S.videos.filter(v => !v.excluded);
+  $('#renderInfo').textContent = `${inc.length} video · ${fmt(inc.reduce((a, v) => a + v.duration, 0))} ham görüntü · ${inc.reduce((a, v) => a + v.bleeps, 0)} bip · ${inc.reduce((a, v) => a + v.quotes, 0)} ⭐`;
+}
+$('#form').addEventListener('change', () => {
+  const d = {};
+  for (const el of $('#form').querySelectorAll('[name]')) d[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+  api('/api/settings', d);
+});
+async function render() {
+  $('#form').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  await api('/api/render', {});
+  $('#result').innerHTML = '';
+  refresh(); poll();
+}
+
+function drawJobs() {
+  const r = S.jobs.find(j => j.kind === 'render');
+  $('#renderBtn').disabled = r && r.status === 'running';
+  if (r) {
+    $('#rProg').style.display = r.status === 'running' ? '' : 'none';
+    $('#rProg div').style.width = (r.progress * 100).toFixed(1) + '%';
+    $('#rMsg').textContent = r.message; $('#rMsg').style.color = r.status === 'error' ? 'var(--red)' : '';
+    if (r.status === 'done' && r.result && $('#result').dataset.shown !== r.id) {
+      $('#result').dataset.shown = r.id;
+      const f = r.result, u = n => '/files/cikti/' + enc(n);
+      $('#result').innerHTML = `<video controls src="${u(f.video)}?v=${r.id}" style="margin-top:10px"></video>
+        <div class="pbar"><a href="${u(f.video)}?dl=1"><button class="primary">⬇ Videoyu indir</button></a>
+        <a href="${u(f.xml)}?dl=1"><button>⬇ Premiere Pro XML</button></a><a href="${u(f.csv)}?dl=1"><button>⬇ Sıralama listesi</button></a></div>`;
+    }
+  }
+  if (cur && T) drawTranscript();
+  const tj = S.jobs.filter(j => j.kind === 'transcribe');
+  tj.forEach(j => {
+    if (j.status === 'running' || seenJobs.has(j.id)) return;
+    seenJobs.add(j.id);
+    if (j.status === 'done' && j.result && j.result.name === cur) loadTranscript();
+    if (j.status === 'error' && firstLoadDone) toast('⚠ ' + j.message);
+  });
+}
+const seenJobs = new Set();
+let firstLoadDone = false;
+function drawOutputs() {
+  $('#outputs').innerHTML = S.outputs.length ? S.outputs.map(o => `<a style="color:var(--accent2);margin-right:14px" href="/files/cikti/${enc(o)}?dl=1">${esc(o)}</a>`).join('') : 'Henüz çıktı yok.';
+}
+let polling = false;
+async function poll() {
+  if (polling) return; polling = true;
+  while (true) {
+    await new Promise(r => setTimeout(r, 1000));
+    try { await refresh(); } catch (e) {}
+    if (!S.jobs.some(j => j.status === 'running')) break;
+  }
+  polling = false;
+}
+
+/* ---------------- yükleme ---------------- */
+function pick(kind) { $(kind === 'music' ? '#fileMusic' : '#fileVideo').click(); }
+$('#fileVideo').onchange = e => { upload([...e.target.files], 'video'); e.target.value = ''; };
+$('#fileMusic').onchange = e => { upload([...e.target.files], 'music'); e.target.value = ''; };
+let dragDepth = 0;
+addEventListener('dragenter', e => { if (e.dataTransfer.types.includes('Files')) { dragDepth++; document.body.classList.add('dragover'); } });
+addEventListener('dragleave', e => { if (e.dataTransfer.types.includes('Files') && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragover'); } });
+addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+addEventListener('drop', e => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragover');
+  const files = [...e.dataTransfer.files];
+  upload(files.filter(f => !f.type.startsWith('audio/')), 'video');
+  upload(files.filter(f => f.type.startsWith('audio/')), 'music');
+});
+async function upload(files, kind) {
+  for (const f of files) {
+    const row = document.createElement('div'); row.className = 'u';
+    row.innerHTML = `<span>${esc(f.name)}</span><div class="progress"><div></div></div><span class="pct">0%</span>`;
+    $('#uploads').append(row);
+    await new Promise(res => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', `/api/upload?kind=${kind}&name=${enc(f.name)}&lastModified=${f.lastModified}`);
+      x.upload.onprogress = e => { const p = e.loaded / e.total * 100; row.querySelector('.progress div').style.width = p + '%'; row.querySelector('.pct').textContent = p.toFixed(0) + '%'; };
+      x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {} if (j.error) toast('⚠ ' + f.name + ': ' + j.error); row.remove(); refresh(); res(); };
+      x.onerror = () => { toast('⚠ Yüklenemedi: ' + f.name); row.remove(); res(); };
+      x.send(f);
+    });
+  }
+}
+
+refresh().then(() => { firstLoadDone = true; if (S.videos.length) openVideo(S.videos[0].name, false); if (S.jobs.some(j => j.status === 'running')) poll(); });
+</script>
+</body>
+</html>
